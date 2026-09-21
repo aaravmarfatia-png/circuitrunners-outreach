@@ -1,0 +1,6 @@
+# Development / test dependencies for the Gmail Outreach Drafts project.
+# Install with: pip install -r requirements-dev.txt
+# (This also installs the runtime deps listed in requirements.txt.)
+-r requirements.txt
+pytest
+hypothesis

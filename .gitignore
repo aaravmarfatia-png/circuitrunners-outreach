@@ -1,0 +1,34 @@
+# --- Secrets: NEVER commit these ---
+credentials.json
+token.json
+
+# Per-user runtime data
+*.token.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build outputs
+build/
+dist/
+*.spec.bak
+
+# Test / tooling caches
+.pytest_cache/
+.hypothesis/
+.DS_Store
+
+# Packaging scratch
+dmg_stage/
+winkit/
+AppIcon.iconset/
+
+# Editor
+.idea/
+.vscode/
+
+# Real recipient list (PII) - keep out of the repo
+contacts.csv
