@@ -250,7 +250,7 @@
     </footer>
   </div>
 
-  <audio id="bg-music" loop preload="metadata"><source src="Saravana-Bhavana.m4a" type="audio/mp4" /></audio>
+  <audio id="bg-music" loop preload="metadata" autoplay><source src="Saravana-Bhavana.m4a" type="audio/mp4" /></audio>
 
   <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
     <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
@@ -262,7 +262,7 @@
     <span>Your download should start automatically.</span>
   </div>
 
-  <button id="music-toggle" class="music-toggle is-muted" type="button" aria-label="Turn music on" title="Turn music on">
+  <button id="music-toggle" class="music-toggle" type="button" aria-label="Turn music off" title="Turn music off">
     <svg class="icon-playing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
     <svg class="icon-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
   </button>
@@ -303,8 +303,29 @@
 
     (function () {
       var audio=document.getElementById("bg-music"), btn=document.getElementById("music-toggle");
-      function reflect(){ if(audio.paused){ btn.classList.add("is-muted"); btn.setAttribute("aria-label","Turn music on"); btn.title="Turn music on"; } else { btn.classList.remove("is-muted"); btn.setAttribute("aria-label","Turn music off"); btn.title="Turn music off"; } }
-      btn.addEventListener("click", function(){ if(audio.paused){ audio.play().then(reflect).catch(reflect); } else { audio.pause(); reflect(); } });
+      var KEY="cr-music-off", userOff=false;
+      try { userOff = localStorage.getItem(KEY)==="1"; } catch(e){}
+
+      function reflect(){
+        if(audio.paused){ btn.classList.add("is-muted"); btn.setAttribute("aria-label","Turn music on"); btn.title="Turn music on"; }
+        else { btn.classList.remove("is-muted"); btn.setAttribute("aria-label","Turn music off"); btn.title="Turn music off"; }
+      }
+      function play(){ if(userOff) return; var p=audio.play(); if(p&&p.then){ p.then(reflect).catch(function(){}); } else { reflect(); } }
+
+      // Attempt autoplay immediately (unless the visitor turned it off before).
+      if(userOff){ audio.pause(); reflect(); } else { play(); }
+
+      // Fallback: many browsers block autoplay until the first interaction.
+      function firstInteraction(){ if(!userOff && audio.paused){ play(); } cleanup(); }
+      function cleanup(){ ["pointerdown","keydown","scroll","touchstart"].forEach(function(evt){ document.removeEventListener(evt, firstInteraction); }); }
+      ["pointerdown","keydown","scroll","touchstart"].forEach(function(evt){ document.addEventListener(evt, firstInteraction, { passive:true }); });
+
+      // Toggle button; remembers an off choice across visits.
+      btn.addEventListener("click", function(){
+        if(audio.paused){ userOff=false; try{ localStorage.removeItem(KEY); }catch(e){} play(); }
+        else { userOff=true; try{ localStorage.setItem(KEY,"1"); }catch(e){} audio.pause(); }
+        reflect();
+      });
       reflect();
     })();
   </script>
