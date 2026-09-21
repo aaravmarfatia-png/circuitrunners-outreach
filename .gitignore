@@ -32,3 +32,8 @@ AppIcon.iconset/
 
 # Real recipient list (PII) - keep out of the repo
 contacts.csv
+
+# Built distributable artifacts (published via GitHub Releases, not git)
+CircuitRunners-Outreach-macOS.dmg
+CircuitRunners-Outreach-Windows-*.zip
+*.dmg

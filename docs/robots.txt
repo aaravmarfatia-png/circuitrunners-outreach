@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://aaravmarfatia-png.github.io/circuitrunners-outreach/sitemap.xml
