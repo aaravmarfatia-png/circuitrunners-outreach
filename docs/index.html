@@ -14,9 +14,14 @@
   <meta property="og:description" content="Create personalized Gmail drafts for school outreach in seconds. Free desktop app for Windows and macOS." />
   <meta property="og:url" content="https://aaravmarfatia-png.github.io/circuitrunners-outreach/" />
   <meta property="og:site_name" content="CircuitRunners Outreach" />
+  <meta property="og:image" content="https://aaravmarfatia-png.github.io/circuitrunners-outreach/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="CircuitRunners Outreach — personalized Gmail drafts for school outreach" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="CircuitRunners Outreach" />
   <meta name="twitter:description" content="Create personalized Gmail drafts for school outreach in seconds. Free desktop app for Windows and macOS." />
+  <meta name="twitter:image" content="https://aaravmarfatia-png.github.io/circuitrunners-outreach/og-image.png" />
   <style>
     :root {
       --navy:#0b1533; --blue:#2b8fff; --blue-dark:#1668d6; --cyan:#38e1c4;
@@ -230,12 +235,21 @@
       </a>
     </main>
 
-    <p class="version">v1.0 · updated September 2026</p>
+    <p class="version" id="version-line">v1.0 · updated September 2026</p>
+    <p class="version" id="downloads-line" style="margin-top:6px; opacity:0.85;"></p>
 
     <section class="steps" aria-label="How it works">
       <div class="step"><div class="num">1</div><div class="step-title">Download</div><div class="step-desc">Grab the build for your platform above.</div></div>
       <div class="step"><div class="num">2</div><div class="step-title">Install &amp; open</div><div class="step-desc">Run it and approve the first-launch security prompt.</div></div>
       <div class="step"><div class="num">3</div><div class="step-title">Generate drafts</div><div class="step-desc">Personalized Gmail drafts, ready for you to review and send.</div></div>
+    </section>
+
+    <section class="section reveal" id="shot-section" aria-label="App preview" hidden>
+      <h2>See it in action</h2>
+      <p class="section-sub">A quick look at the app.</p>
+      <div style="width:100%;border-radius:18px;border:1px solid var(--card-border);overflow:hidden;background:rgba(255,255,255,0.04)">
+        <img id="app-shot" src="screenshot.png" alt="CircuitRunners Outreach app window" style="display:block;width:100%;height:auto" />
+      </div>
     </section>
 
     <section class="section reveal" aria-label="Features">
@@ -418,6 +432,33 @@
         reflect();
       });
       reflect();
+    })();
+
+    (function () {
+      var API="https://api.github.com/repos/aaravmarfatia-png/circuitrunners-outreach/releases/latest";
+      fetch(API, { headers: { "Accept": "application/vnd.github+json" } })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(rel){
+          if (!rel) return;
+          var vEl=document.getElementById("version-line");
+          if (vEl && rel.tag_name) {
+            var d = rel.published_at ? new Date(rel.published_at) : null;
+            var when = d ? d.toLocaleDateString(undefined,{year:"numeric",month:"long"}) : "";
+            vEl.textContent = rel.tag_name + (when ? " \u00b7 updated " + when : "");
+          }
+          var total=0;
+          (rel.assets||[]).forEach(function(a){ total += (a.download_count||0); });
+          var dEl=document.getElementById("downloads-line");
+          if (dEl && total>0) { dEl.textContent = total.toLocaleString() + (total===1?" download":" downloads"); }
+        })
+        .catch(function(){});
+    })();
+
+    (function () {
+      var img=document.getElementById("app-shot"), sec=document.getElementById("shot-section");
+      if (!img || !sec) return;
+      img.addEventListener("load", function(){ if (img.naturalWidth>1) sec.hidden=false; });
+      img.addEventListener("error", function(){ sec.remove(); });
     })();
   </script>
 </body>
