@@ -65,11 +65,17 @@ supporting helpers) are added by subsequent implementation tasks.
 
 import base64  # base64url-encode the serialized MIME message for drafts.create (Req 7.6)
 import csv  # standard-library CSV reader used to parse the Contacts_File (Req 2.1)
+import json  # persist/restore user settings as JSON (Req 7.1-7.4)
 import logging  # console error logging for fail-fast auth conditions (Req 3.3, 3.7)
 import os  # resolve attachment file paths (used by main() when building paths)
 import os.path  # existence check for the cached TOKEN_FILE before loading it (Req 3.5)
+import random  # random selection of Managed_Photos from the pool (Req 3.6)
+import re  # basic email-format validation (Req 8.1)
+import shutil  # copy image files into the managed Photo_Pool (Req 3.2, 3.4)
 import socket  # detect socket-level timeouts on Gmail API calls (Req 10.1)
+import sys  # detect frozen/platform for the per-user Writable_Base (Req 3.1, 7.1)
 import time  # rate-limit pause between drafts (Req 9.1)
+from dataclasses import dataclass  # BulkResult record for the bulk runner (Req 1.5)
 from email.mime.image import MIMEImage  # image attachment parts (Req 7.3)
 from email.mime.multipart import MIMEMultipart  # container message with body + images (Req 7.1)
 from email.mime.text import MIMEText  # plain-text body part (Req 7.1)
@@ -85,6 +91,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow  # interactive installed-
 # (missing/invalid credentials.json, denied/failed authorization) are logged
 # through this logger before the run is terminated (Req 3.3, 3.7).
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# App version — single source of truth (App_Version)
+# ---------------------------------------------------------------------------
+# The canonical version string for the whole application. The GUI window title
+# and About dialog display this value, and both packagers (the macOS .spec and
+# the Windows setup.py) import it as their build version so displayed and built
+# versions never drift apart. This is the ONE place the version is defined.
+# (Req 13.1)
+__version__ = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Module-level constants and configuration defaults (editable)
@@ -799,6 +815,630 @@ def main():
     print(f"Successful drafts: {len(successes)}")
     print(f"Failed / skipped rows: {len(failures)}")
     print(f"Total contacts processed: {len(rows)}")
+
+
+# ===========================================================================
+# v1.1.0 enhancement seams — validation/normalization, photo pool, settings,
+# and the duplicate-draft guard. These are pure or side-effect-isolated helpers
+# added by the v1.1.0 batch; they wrap (and never replace) the existing
+# draft-only behavior above. All are unit- and property-testable without a
+# display, and the duplicate guard is read-only (never creates or sends).
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Per-user Writable_Base (mirrors gui._writable_base for headless callers)
+# ---------------------------------------------------------------------------
+# The name of the per-user folder under the platform's app-data location. Kept
+# identical to the GUI's APP_NAME so the core module and the GUI resolve the
+# same Writable_Base.
+APP_NAME = "CircuitRunners Outreach"
+
+
+def writable_base() -> str:
+    """Return the per-user writable folder for photos, settings, and token.
+
+    Mirrors ``gui._writable_base`` so headless callers (tests, the core seams)
+    resolve the same location the GUI uses:
+
+        Windows -> %APPDATA%/CircuitRunners Outreach
+        macOS   -> ~/Library/Application Support/CircuitRunners Outreach
+        script  -> the module directory (project folder when run as a script)
+
+    Only a frozen (packaged) app uses the per-user app-data folder; when run as
+    a plain script the module directory is used, matching the GUI's behavior.
+    (Req 3.1, 7.1)
+    """
+    if getattr(sys, "frozen", False):
+        if sys.platform.startswith("win"):
+            root = os.environ.get("APPDATA") or os.path.expanduser("~")
+            base = os.path.join(root, APP_NAME)
+        elif sys.platform == "darwin":
+            base = os.path.expanduser(f"~/Library/Application Support/{APP_NAME}")
+        else:
+            base = os.path.expanduser(f"~/.{APP_NAME.lower().replace(' ', '-')}")
+        os.makedirs(base, exist_ok=True)
+        return base
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------------------
+# Email validation and field normalization (Req 8.1, 8.2, 8.3)
+# ---------------------------------------------------------------------------
+# A deliberately permissive single-address pattern: one or more non-``@``,
+# non-whitespace characters, then ``@``, then a domain with at least one dot and
+# no ``@``/whitespace. It rejects blanks, spaces, and missing ``@``/dot without
+# trying to fully implement RFC 5322. Validation runs on an already-trimmed
+# value (see normalize_fields), so the anchors match the whole string.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_fields(row: dict) -> dict:
+    """Return a copy of ``row`` with every string value whitespace-trimmed.
+
+    Every string value has ``str.strip()`` applied; non-string values (should
+    not normally occur in a Contact_Row, but handled defensively) are copied
+    unchanged. The input dict is not mutated — a new dict is returned.
+
+    Normalization is idempotent: ``normalize_fields(normalize_fields(row))``
+    equals ``normalize_fields(row)`` because ``strip()`` on an already-trimmed
+    string is a no-op. This cleans pasted values with surrounding whitespace
+    before they are used and validated (Req 8.2).
+
+    Args:
+        row: A Contact_Row-shaped dict (may contain surrounding whitespace).
+
+    Returns:
+        A new dict with the same keys and whitespace-trimmed string values.
+    """
+    return {
+        key: (value.strip() if isinstance(value, str) else value)
+        for key, value in row.items()
+    }
+
+
+def is_valid_email(email: str) -> bool:
+    """Return True iff ``email`` matches a basic single-address format.
+
+    Expects an already-trimmed value (callers run :func:`normalize_fields`
+    first). Returns a plain ``bool`` so callers can branch on it directly: a
+    value that does not match is rejected with an inline hint and no draft is
+    created; a value that matches proceeds to draft creation (Req 8.1, 8.3).
+
+    Args:
+        email: The (already trimmed) recipient email string to check.
+
+    Returns:
+        ``True`` if the value is a well-formed single email address, else
+        ``False``.
+    """
+    return bool(_EMAIL_RE.match(email))
+
+
+# ---------------------------------------------------------------------------
+# Shared Photo_Pool management (Req 3.1-3.5)
+# ---------------------------------------------------------------------------
+# Image file extensions recognized as Managed_Photos in the pool. Comparison is
+# always done on the lower-cased extension so ``.JPG`` and ``.jpg`` both match.
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+
+
+def _is_image_file(path: str) -> bool:
+    """Return True iff ``path`` names a file with a recognized image extension."""
+    return os.path.splitext(path)[1].lower() in IMAGE_EXTS
+
+
+def photo_pool_dir() -> str:
+    """Return the Photo_Pool directory: the ``photos`` subfolder of Writable_Base.
+
+    The pool is the single shared location for user-managed demo photos across
+    drafts. Callers create it as needed (see :func:`seed_photo_pool` and
+    :func:`add_pool_photos`, both of which ``makedirs`` the pool). (Req 3.1)
+    """
+    return os.path.join(writable_base(), "photos")
+
+
+def seed_photo_pool(pool_dir: str, seed_dir: str) -> None:
+    """Seed an empty Photo_Pool from the bundled Seed_Images (idempotent).
+
+    If ``pool_dir`` already contains at least one image file, this is a no-op so
+    the user's managed photos are never overwritten. Otherwise every image file
+    found directly in ``seed_dir`` is copied into ``pool_dir`` (which is created
+    if missing). Seeding twice therefore equals seeding once (Req 3.2).
+
+    A missing ``seed_dir`` is tolerated: with no images to copy the pool is
+    simply left empty.
+
+    Args:
+        pool_dir: The Photo_Pool directory (see :func:`photo_pool_dir`).
+        seed_dir: The bundled ``attachments`` folder holding the Seed_Images.
+    """
+    os.makedirs(pool_dir, exist_ok=True)
+
+    # No-op when the pool already holds images (idempotent seeding) (Req 3.2).
+    if list_pool_photos(pool_dir):
+        return
+
+    if not os.path.isdir(seed_dir):
+        return
+
+    for name in sorted(os.listdir(seed_dir)):
+        source = os.path.join(seed_dir, name)
+        if os.path.isfile(source) and _is_image_file(source):
+            shutil.copyfile(source, os.path.join(pool_dir, name))
+
+
+def list_pool_photos(pool_dir: str) -> list:
+    """Return a sorted list of absolute paths to image files in the pool.
+
+    Only files with a recognized image extension (:data:`IMAGE_EXTS`) are
+    returned; subdirectories and non-image files are ignored. A missing pool
+    directory yields an empty list. (Req 3.3)
+    """
+    if not os.path.isdir(pool_dir):
+        return []
+
+    paths = []
+    for name in os.listdir(pool_dir):
+        full = os.path.join(pool_dir, name)
+        if os.path.isfile(full) and _is_image_file(full):
+            paths.append(os.path.abspath(full))
+    return sorted(paths)
+
+
+def add_pool_photos(pool_dir: str, source_paths) -> list:
+    """Copy each source image into the Photo_Pool and return the new pool paths.
+
+    The pool directory is created if missing. Each path in ``source_paths`` is
+    copied into the pool under its own basename; the list of resulting absolute
+    pool paths is returned in the same order (Req 3.4).
+
+    Args:
+        pool_dir: The Photo_Pool directory.
+        source_paths: An iterable of filesystem paths to image files to add.
+
+    Returns:
+        The absolute pool paths of the copied files.
+    """
+    os.makedirs(pool_dir, exist_ok=True)
+
+    added = []
+    for source in source_paths:
+        dest = os.path.join(pool_dir, os.path.basename(source))
+        shutil.copyfile(source, dest)
+        added.append(os.path.abspath(dest))
+    return added
+
+
+def remove_pool_photo(pool_dir: str, filename: str) -> None:
+    """Delete one Managed_Photo from the Photo_Pool by file name.
+
+    ``filename`` is treated as a basename within ``pool_dir``. A missing file is
+    ignored so removal is safe to call even if the photo was already deleted
+    (Req 3.5).
+
+    Args:
+        pool_dir: The Photo_Pool directory.
+        filename: The base file name of the Managed_Photo to remove.
+    """
+    target = os.path.join(pool_dir, os.path.basename(filename))
+    try:
+        os.remove(target)
+    except FileNotFoundError:
+        # Already absent — nothing to do.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Remembered user settings (Req 7.1-7.4)
+# ---------------------------------------------------------------------------
+# The defaults every load starts from; stored values are merged on top so a
+# settings file missing a key still yields a complete settings dict.
+DEFAULT_SETTINGS = {
+    "sender_name": "",
+    "last_template": "Elementary",
+    "window_size": "640x660",
+}
+
+
+def settings_path() -> str:
+    """Return the Settings_File path: ``settings.json`` under Writable_Base."""
+    return os.path.join(writable_base(), "settings.json")
+
+
+def load_settings(path: str = None) -> dict:
+    """Return stored settings merged over a copy of :data:`DEFAULT_SETTINGS`.
+
+    Reads the JSON Settings_File at ``path`` (defaulting to
+    :func:`settings_path`) and overlays its keys onto a fresh copy of the
+    defaults, so the result always contains every default key. On a missing
+    file, unparseable JSON, or any other error, the defaults are returned
+    unchanged — this function never raises (Req 7.3, 7.4).
+
+    Args:
+        path: Optional Settings_File path; defaults to :func:`settings_path`.
+
+    Returns:
+        A settings dict with at least the keys of :data:`DEFAULT_SETTINGS`.
+    """
+    if path is None:
+        path = settings_path()
+
+    settings = dict(DEFAULT_SETTINGS)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            stored = json.load(f)
+        if isinstance(stored, dict):
+            settings.update(stored)
+    except Exception:  # noqa: BLE001 - any read/parse error falls back to defaults (Req 7.4)
+        return dict(DEFAULT_SETTINGS)
+    return settings
+
+
+def save_settings(data: dict, path: str = None) -> None:
+    """Atomically write ``data`` as JSON to the Settings_File.
+
+    Writes to a temporary file in the same directory first, then
+    ``os.replace``s it over the destination so a reader never observes a
+    partially written file (Req 7.1, 7.2). The destination directory is created
+    if missing.
+
+    Args:
+        data: The settings dict to persist.
+        path: Optional Settings_File path; defaults to :func:`settings_path`.
+    """
+    if path is None:
+        path = settings_path()
+
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-draft guard (Req 4.1, 4.2)
+# ---------------------------------------------------------------------------
+def _decode_draft_headers(draft: dict) -> dict:
+    """Return a case-insensitive {header_name: value} map for a draft resource.
+
+    Reads the ``To`` and ``Subject`` (and any other) headers from a draft's
+    nested ``message.payload.headers`` list. Missing pieces yield an empty map,
+    so a malformed or metadata-less draft simply contributes no headers.
+    """
+    headers = (
+        draft.get("message", {})
+        .get("payload", {})
+        .get("headers", [])
+    )
+    result = {}
+    for header in headers:
+        name = header.get("name")
+        if name:
+            result[name.lower()] = header.get("value", "")
+    return result
+
+
+def find_duplicate_draft(service, recipient_email: str, subject: str) -> bool:
+    """Return True iff an existing Gmail draft matches BOTH recipient and subject.
+
+    Lists the authenticated account's drafts via
+    ``service.users().drafts().list(userId="me")`` and fetches each draft's
+    metadata headers, comparing the decoded ``To`` and ``Subject`` against the
+    candidate. A match requires BOTH the recipient email (compared
+    case-insensitively) AND the subject (compared exactly) to be equal (Req 4.1,
+    4.2).
+
+    This function is strictly READ-ONLY: it only lists and gets drafts and never
+    creates or sends anything. An empty draft list, missing headers, or any
+    per-draft fetch error is handled gracefully and simply does not count as a
+    match, so the function returns ``False`` rather than raising.
+
+    Args:
+        service: The Gmail API service built by :func:`build_service`.
+        recipient_email: The candidate draft's recipient (``To``) address.
+        subject: The candidate draft's subject line.
+
+    Returns:
+        ``True`` if some existing draft matches both recipient and subject,
+        else ``False``.
+    """
+    target_email = (recipient_email or "").strip().lower()
+
+    listing = service.users().drafts().list(userId="me").execute() or {}
+    drafts = listing.get("drafts", []) or []
+
+    for draft in drafts:
+        draft_id = draft.get("id")
+        if not draft_id:
+            continue
+
+        try:
+            full = service.users().drafts().get(
+                userId="me", id=draft_id, format="metadata"
+            ).execute()
+        except Exception:  # noqa: BLE001 - a per-draft fetch failure is not a match
+            continue
+
+        headers = _decode_draft_headers(full)
+        existing_to = headers.get("to", "").strip().lower()
+        existing_subject = headers.get("subject", "")
+
+        if existing_to == target_email and existing_subject == subject:
+            return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Random photo selection (Req 3.6) — Task 2.2
+# ---------------------------------------------------------------------------
+def select_pool_photos(pool_dir: str, k: int = 2, rng=random) -> list:
+    """Return ``k`` distinct Managed_Photos chosen at random from the pool.
+
+    Lists the current pool via :func:`list_pool_photos` and draws ``k`` distinct
+    paths with ``rng.sample`` (no repeats). The injected ``rng`` defaults to the
+    module :mod:`random` so tests can pass a seeded generator for determinism.
+
+    Args:
+        pool_dir: The Photo_Pool directory to draw from.
+        k: The number of distinct photos to select (2 for Elementary/Middle).
+        rng: A random source exposing ``sample`` (defaults to :mod:`random`).
+
+    Returns:
+        A list of ``k`` distinct pool photo paths.
+
+    Raises:
+        ValueError: If the pool contains fewer than ``k`` image files.
+    """
+    pool = list_pool_photos(pool_dir)
+    if len(pool) < k:
+        raise ValueError("photo pool needs at least k images")
+    return rng.sample(pool, k)
+
+
+# ---------------------------------------------------------------------------
+# Retry with exponential backoff on transient Gmail errors (Req 5) — Task 4.2
+# ---------------------------------------------------------------------------
+# Gmail API HTTP statuses treated as recoverable/transient. A 5xx response
+# (server-side hiccup) or a request timeout is worth retrying; anything else
+# (4xx, auth, malformed request) is a hard error that propagates immediately.
+TRANSIENT_STATUSES = {500, 502, 503, 504}
+
+
+def _is_transient(exc) -> bool:
+    """Return True iff ``exc`` is a recoverable/transient Gmail failure.
+
+    A failure is transient when it is either:
+      * an :class:`HttpError` whose HTTP status is in :data:`TRANSIENT_STATUSES`
+        (read from ``exc.resp.status`` when available, otherwise parsed from the
+        error's string form), or
+      * a request timeout (:class:`TimeoutError` or :class:`socket.timeout`).
+
+    Any other exception (4xx errors, auth failures, malformed requests, etc.)
+    is considered non-transient and returns ``False`` so the caller re-raises
+    without retrying.
+    """
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+
+    if isinstance(exc, HttpError):
+        status = None
+        resp = getattr(exc, "resp", None)
+        if resp is not None:
+            status = getattr(resp, "status", None)
+        if status is None:
+            status = getattr(exc, "status_code", None)
+        if status is not None:
+            try:
+                status = int(status)
+            except (TypeError, ValueError):
+                status = None
+        if status is None:
+            # Fall back to scanning the string form for a known transient code.
+            text = str(exc)
+            for code in TRANSIENT_STATUSES:
+                if str(code) in text:
+                    status = code
+                    break
+        return status in TRANSIENT_STATUSES
+
+    return False
+
+
+def create_draft_with_retry(service, message_body, *, sleep=time.sleep,
+                            max_attempts: int = 3) -> dict:
+    """Create a draft, retrying transient failures with exponential backoff.
+
+    Calls :func:`create_draft` up to ``max_attempts`` times. When a call raises
+    a Transient_Error (see :func:`_is_transient`) and attempts remain, waits
+    ``sleep(2 ** (attempt - 1))`` before retrying (1s, 2s, 4s, ...); the delay
+    is obtained through the injected ``sleep`` so tests can mock it. A
+    non-transient error propagates immediately (no retry). If the final allowed
+    attempt still raises a transient error, that error is re-raised.
+
+    For ``f`` injected transient failures followed by success, the total number
+    of create attempts equals ``min(f + 1, max_attempts)``.
+
+    Args:
+        service: The Gmail API service built by :func:`build_service`.
+        message_body: The ``{"raw": ...}`` message dict to submit.
+        sleep: Callable used for backoff delays (defaults to ``time.sleep``).
+        max_attempts: Maximum number of create attempts (default 3).
+
+    Returns:
+        The created draft resource from :func:`create_draft`.
+
+    Raises:
+        Exception: The last transient error after exhausting all attempts, or
+            any non-transient error immediately on the first occurrence.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return create_draft(service, message_body)
+        except Exception as exc:  # noqa: BLE001 - classified by _is_transient
+            if not _is_transient(exc):
+                raise
+            if attempt >= max_attempts:
+                raise
+            sleep(2 ** (attempt - 1))
+
+
+# ---------------------------------------------------------------------------
+# Bulk runner: results, attachment policy, per-row processing (Req 1, 11.4)
+# ---------------------------------------------------------------------------
+@dataclass
+class BulkResult:
+    """One per processed Contact_Row outcome record (Bulk_Result).
+
+    Attributes:
+        identifier: The Recipient_Email when present, else ``"row N"``.
+        outcome: One of ``"success"``, ``"skipped"``, or ``"failed"``.
+        reason: A short explanation (``""`` for success; e.g. ``"duplicate"``,
+            a validation message, or error text).
+    """
+
+    identifier: str
+    outcome: str
+    reason: str = ""
+
+
+def _row_identifier(row: dict, row_number: int) -> str:
+    """Return the row's identifier: Recipient_Email if truthy, else ``row N``.
+
+    Thin wrapper over the existing :func:`_row_id` so the bulk runner and the
+    single-contact flow share one identifier convention.
+    """
+    return _row_id(row, row_number)
+
+
+def attachments_for(row: dict, *, pool_dir=None, per_draft_photos=None) -> list:
+    """Resolve the attachment file paths for a Contact_Row by Template_Type.
+
+    Policy (Req 1.5, 3.6, 3.7, 3.9):
+      * ``Elementary`` / ``Middle`` -> 2 distinct random Managed_Photos from the
+        Photo_Pool (``select_pool_photos(pool_dir or photo_pool_dir(), 2)``).
+      * ``Response`` -> no attachments.
+      * ``Post-Demo`` -> the caller-supplied ``per_draft_photos`` (single-contact
+        screen); bulk passes none, so a bulk Post-Demo row attaches zero photos.
+
+    Args:
+        row: A Contact_Row dict (its ``Template_Type`` selects the policy).
+        pool_dir: The Photo_Pool directory (defaults to :func:`photo_pool_dir`).
+        per_draft_photos: Explicit per-draft photo paths for a Post-Demo draft.
+
+    Returns:
+        A list of attachment file paths (possibly empty).
+    """
+    template_type = row.get("Template_Type")
+    if template_type in ("Elementary", "Middle"):
+        return select_pool_photos(pool_dir or photo_pool_dir(), 2)
+    if template_type == "Response":
+        return []
+    if template_type == "Post-Demo":
+        return list(per_draft_photos or [])
+    return []
+
+
+def process_contact_row(row: dict, row_number: int, *, service, sender,
+                        override, attachments_for) -> "BulkResult":
+    """Validate, build, duplicate-guard, and create one draft as a BulkResult.
+
+    This function NEVER raises for a per-row problem — every failure (validation,
+    missing attachment, duplicate, transient/non-transient API error) is
+    converted into a :class:`BulkResult` so a batch keeps processing the
+    remaining rows (Req 1.3, 1.7, 4.2, 11.4).
+
+    Steps:
+      1. :func:`normalize_fields` the row, then compute its identifier.
+      2. :func:`validate_row`; on error -> ``failed`` with the validation message.
+      3. Look up the template, render the subject and body.
+      4. Resolve attachment paths via the injected ``attachments_for(row)``.
+      5. Build the MIME message with CC_RECIPIENTS.
+      6. If ``override`` is off and :func:`find_duplicate_draft` matches ->
+         ``skipped`` with reason ``"duplicate"`` (no create call).
+      7. :func:`create_draft_with_retry`; success -> ``success``.
+
+    Args:
+        row: A raw Contact_Row dict.
+        row_number: 1-based row position (used in the identifier fallback).
+        service: The Gmail API service (mockable).
+        sender: The authenticated sender address (From header).
+        override: When True, skip the duplicate check and always create.
+        attachments_for: Callable ``attachments_for(row)`` returning paths.
+
+    Returns:
+        Exactly one :class:`BulkResult` describing this row's outcome.
+    """
+    normalized = normalize_fields(row)
+    identifier = _row_identifier(normalized, row_number)
+
+    error = validate_row(normalized, row_number)
+    if error is not None:
+        return BulkResult(identifier, "failed", error)
+
+    try:
+        template = TEMPLATES[normalized["Template_Type"]]
+        subject = render_template(template["subject"], normalized)
+        body = render_template(template["body"], normalized)
+        recipient = normalized["Recipient_Email"]
+
+        paths = attachments_for(normalized)
+        message = create_message_with_attachments(
+            sender, recipient, subject, body, paths, CC_RECIPIENTS
+        )
+
+        if not override and find_duplicate_draft(service, recipient, subject):
+            return BulkResult(identifier, "skipped", "duplicate")
+
+        create_draft_with_retry(service, message)
+        return BulkResult(identifier, "success")
+    except FileNotFoundError as exc:
+        return BulkResult(identifier, "failed", f"missing attachment: {exc}")
+    except HttpError as exc:
+        return BulkResult(identifier, "failed", f"Gmail API error: {exc}")
+    except (TimeoutError, socket.timeout) as exc:
+        return BulkResult(identifier, "failed", f"timeout: {exc}")
+    except Exception as exc:  # noqa: BLE001 - isolate any per-row failure (Req 11.4)
+        return BulkResult(identifier, "failed", str(exc))
+
+
+def run_bulk(rows, *, service, sender, override, attachments_for,
+             sleep=time.sleep, on_result=None) -> list:
+    """Process every Contact_Row via :func:`process_contact_row`.
+
+    Produces exactly one :class:`BulkResult` per input row (so
+    ``len(results) == len(rows)`` and successes + skipped + failed == total),
+    pausing ``RATE_LIMIT_SECONDS`` through the injected ``sleep`` after each row
+    attempt (Req 1.3, 1.4, 1.6, 1.8, 11.4). The optional ``on_result`` callback
+    is invoked with each result so a GUI can append a table row incrementally.
+
+    Args:
+        rows: An iterable of Contact_Row dicts.
+        service: The Gmail API service (mockable).
+        sender: The authenticated sender address.
+        override: When True, bypass the duplicate check for every row.
+        attachments_for: Callable ``attachments_for(row)`` returning paths.
+        sleep: Callable used for rate-limit pacing (defaults to ``time.sleep``).
+        on_result: Optional callback invoked with each :class:`BulkResult`.
+
+    Returns:
+        A list of :class:`BulkResult`, one per input row, in order.
+    """
+    results = []
+    for row_number, row in enumerate(rows, start=1):
+        result = process_contact_row(
+            row, row_number,
+            service=service, sender=sender, override=override,
+            attachments_for=attachments_for,
+        )
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
+        sleep(RATE_LIMIT_SECONDS)
+    return results
 
 
 if __name__ == "__main__":
