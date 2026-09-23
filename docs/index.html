@@ -126,9 +126,59 @@
     .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
     .toast svg { width:18px; height:18px; color:var(--cyan); flex:none; }
     @media (prefers-reduced-motion: reduce) { .blob,.badge .dot,.wrap{animation:none;} .card,.action,.music-toggle,.theme-toggle{transition:none;} .reveal{opacity:1;transform:none;transition:none;} }
+    .copy-link { position:fixed; bottom:22px; right:84px; z-index:10; height:52px; padding:0 18px; border-radius:999px; border:1px solid var(--card-border); background:rgba(255,255,255,0.08); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); color:var(--text); cursor:pointer; display:inline-flex; align-items:center; gap:8px; font-size:0.85rem; font-weight:600; box-shadow:0 8px 24px var(--shadow); transition:transform 0.2s ease,border-color 0.2s ease,background 0.2s ease; }
+    .copy-link:hover { transform:translateY(-2px); border-color:rgba(56,225,196,0.6); background:rgba(56,225,196,0.12); }
+    .copy-link svg { width:16px; height:16px; }
+    @media (max-width:520px){ .copy-link .label{ display:none; } .copy-link{ padding:0 16px; } }
+    /* theme picker modal */
+    .theme-modal { position:fixed; inset:0; z-index:100; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(4,8,22,0.72); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+    .theme-modal.open { display:flex; }
+    .theme-modal .dialog { width:100%; max-width:420px; background:linear-gradient(160deg,#131f4d,#0c1330); border:1px solid rgba(255,255,255,0.14); border-radius:20px; padding:30px 26px; text-align:center; box-shadow:0 24px 60px rgba(4,10,30,0.6); animation:rise 0.4s cubic-bezier(0.2,0.7,0.2,1) both; }
+    .theme-modal h2 { margin:0 0 6px; font-size:1.3rem; font-weight:800; color:#eef2fb; }
+    .theme-modal p { margin:0 0 22px; font-size:0.9rem; color:#aeb8d4; line-height:1.55; }
+    .theme-choices { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .theme-choice { cursor:pointer; border-radius:15px; padding:20px 14px; border:1px solid rgba(255,255,255,0.14); color:#eef2fb; font-weight:700; font-size:0.95rem; display:flex; flex-direction:column; align-items:center; gap:12px; background:transparent; transition:transform 0.18s ease,border-color 0.18s ease; }
+    .theme-choice:hover { transform:translateY(-3px); border-color:rgba(56,225,196,0.7); }
+    .theme-choice .swatch { width:56px; height:56px; border-radius:14px; display:grid; place-items:center; }
+    .theme-choice.dark .swatch { background:linear-gradient(160deg,#0c1330,#131f4d); border:1px solid rgba(255,255,255,0.15); color:#9fd0ff; }
+    .theme-choice.light .swatch { background:linear-gradient(160deg,#eef2fb,#dbe4f5); border:1px solid rgba(13,27,62,0.15); color:#1668d6; }
+    .theme-choice svg { width:26px; height:26px; }
+    .theme-remember { margin-top:20px; display:inline-flex; align-items:center; gap:9px; font-size:0.85rem; color:#aeb8d4; cursor:pointer; user-select:none; }
+    .theme-remember input { width:16px; height:16px; accent-color:var(--cyan); cursor:pointer; }
   </style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "CircuitRunners Outreach",
+    "applicationCategory": "BusinessApplication",
+    "operatingSystem": "macOS, Windows",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "downloadUrl": "https://aaravmarfatia-png.github.io/circuitrunners-outreach/",
+    "softwareVersion": "1.0",
+    "description": "Create personalized Gmail drafts for school outreach. Never sends email."
+  }
+  </script>
 </head>
 <body>
+  <div id="theme-modal" class="theme-modal" role="dialog" aria-modal="true" aria-labelledby="tm-title">
+    <div class="dialog">
+      <h2 id="tm-title">Choose your look</h2>
+      <p>How would you like to view the site?</p>
+      <div class="theme-choices">
+        <button class="theme-choice dark" type="button" data-choice="dark">
+          <span class="swatch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg></span>
+          Dark
+        </button>
+        <button class="theme-choice light" type="button" data-choice="light">
+          <span class="swatch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg></span>
+          Light
+        </button>
+      </div>
+      <label class="theme-remember"><input type="checkbox" id="theme-remember" /> Remember my choice</label>
+    </div>
+  </div>
+
   <div class="blob one"></div>
   <div class="blob two"></div>
   <div class="blob three"></div>
@@ -262,6 +312,11 @@
     <span>Your download should start automatically.</span>
   </div>
 
+  <button id="copy-link" class="copy-link" type="button" aria-label="Copy link to this page" title="Copy link to this page">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    <span class="label">Copy link</span>
+  </button>
+
   <button id="music-toggle" class="music-toggle" type="button" aria-label="Turn music off" title="Turn music off">
     <svg class="icon-playing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
     <svg class="icon-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
@@ -273,17 +328,53 @@
       var isMac = /Mac/i.test(pf) || /Mac OS X/i.test(ua) || /iPhone|iPad|iPod/i.test(ua);
       var isWin = /Win/i.test(pf) || /Windows/i.test(ua);
       var id = isMac ? "card-macos" : isWin ? "card-windows" : null;
-      if (id) { var el = document.getElementById(id); if (el) el.classList.add("is-recommended"); }
+      if (id) {
+        var el = document.getElementById(id);
+        if (el) {
+          el.classList.add("is-recommended");
+          // Move the matching platform's card first (#6 OS reorder).
+          if (el.parentNode && el.parentNode.firstElementChild !== el) {
+            el.parentNode.insertBefore(el, el.parentNode.firstElementChild);
+          }
+        }
+      }
     })();
 
     (function () {
       var KEY="cr-theme", root=document.documentElement, btn=document.getElementById("theme-toggle");
+      var modal=document.getElementById("theme-modal"), remember=document.getElementById("theme-remember");
+      function apply(t){ if(t==="light") root.setAttribute("data-theme","light"); else root.removeAttribute("data-theme"); }
+      function close(){ if(modal) modal.classList.remove("open"); }
       var saved=null; try { saved=localStorage.getItem(KEY); } catch(e){}
-      if (saved==="light") root.setAttribute("data-theme","light");
+      if (saved==="light"||saved==="dark") { apply(saved); if(remember) remember.checked=true; }
+      else if (modal) {
+        modal.classList.add("open");
+        var f=modal.querySelector(".theme-choice"); if(f) setTimeout(function(){f.focus();},50);
+        document.addEventListener("keydown", function(e){ if(e.key==="Escape" && modal.classList.contains("open")) close(); });
+      }
+      if (modal) modal.querySelectorAll(".theme-choice").forEach(function(c){
+        c.addEventListener("click", function(){
+          var t=c.getAttribute("data-choice"); apply(t);
+          if (remember && remember.checked) { try{ localStorage.setItem(KEY,t); }catch(e){} }
+          close();
+        });
+      });
       if (btn) btn.addEventListener("click", function(){
         var next = root.getAttribute("data-theme")==="light" ? "dark":"light";
-        if (next==="light") root.setAttribute("data-theme","light"); else root.removeAttribute("data-theme");
-        try { localStorage.setItem(KEY,next); } catch(e){}
+        apply(next);
+        var has=false; try{ has=localStorage.getItem(KEY)!==null; }catch(e){}
+        if (has) { try{ localStorage.setItem(KEY,next); }catch(e){} }
+      });
+    })();
+
+    (function () {
+      var btn=document.getElementById("copy-link"); if(!btn) return;
+      var label=btn.querySelector(".label"), orig=label?label.textContent:"";
+      btn.addEventListener("click", function(){
+        var url=window.location.href;
+        function done(){ if(label){ label.textContent="Copied!"; setTimeout(function(){label.textContent=orig;},1600); } }
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(done).catch(fb); } else { fb(); }
+        function fb(){ var t=document.createElement("textarea"); t.value=url; t.style.position="fixed"; t.style.opacity="0"; document.body.appendChild(t); t.select(); try{ document.execCommand("copy"); done(); }catch(e){} document.body.removeChild(t); }
       });
     })();
 

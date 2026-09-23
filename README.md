@@ -1,108 +1,67 @@
-# Gmail Outreach Drafts
+# CircuitRunners Outreach
 
-A Python 3.10+ command-line tool for the Wheeler High School **CircuitRunners
-Robotics Team**. It reads a CSV of contacts, picks a message template and image
-set based on each contact's `Template_Type`, fills in personalization fields,
-and creates a **Gmail draft** for every contact through the Gmail API.
+[![Release](https://img.shields.io/github/v/release/aaravmarfatia-png/circuitrunners-outreach?display_name=tag)](https://github.com/aaravmarfatia-png/circuitrunners-outreach/releases)
+[![Download site](https://img.shields.io/badge/downloads-website-2b8fff)](https://aaravmarfatia-png.github.io/circuitrunners-outreach/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-lightgrey)](https://aaravmarfatia-png.github.io/circuitrunners-outreach/)
 
-The script **never sends email** — it only creates drafts for a human to review
-and send. Every draft automatically Cc's the two team coordinators
-(`ethan.xu@circuitrunners.com` and `melissa.amerault@circuitrunners.com`),
-regardless of template type.
+A desktop app that creates **personalized Gmail drafts** for school outreach for the Wheeler High School CircuitRunners Robotics Team. It never sends email — it only writes drafts to your Gmail Drafts folder for you to review and send.
+
+**Download:** https://aaravmarfatia-png.github.io/circuitrunners-outreach/
+
+## What it does
+
+- Fills a message template per school type (Elementary / Middle / Response / Post-Demo) with the recipient, sender, and school name.
+- CCs the team coordinators on every draft.
+- Attaches demo photos for Elementary/Middle outreach.
+- Creates the message as a Gmail **draft** — you always review and send yourself.
+
+## Install
+
+See the [download page](https://aaravmarfatia-png.github.io/circuitrunners-outreach/) for macOS (`.dmg`) and Windows (MSI build kit).
+
+The apps are unsigned, so the first launch needs a one-time approval:
+- **macOS:** right-click the app -> Open -> Open (or System Settings -> Privacy & Security -> Open Anyway).
+- **Windows:** if SmartScreen appears, More info -> Run anyway.
+
+On first run you provide your own Google OAuth client (`credentials.json`) and sign in. The app shows the steps.
+
+## Data handling
+
+- **Reads:** the contacts CSV you choose and the local photos you add.
+- **Writes:** Gmail **drafts** only — never sends.
+- **Stores locally (per-user):** your `credentials.json`, OAuth token, photos, and settings, under your user data folder.
+- **Scope:** requests only `https://www.googleapis.com/auth/gmail.compose` (create/manage drafts; cannot send).
+
+## Develop / build from source
+
+Requires Python 3.10+.
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest            # run the test suite
+.venv/bin/python gui.py     # run the app locally
+```
+
+Build installers:
+- **macOS (.dmg / .app):** PyInstaller — see the packaging notes and `CircuitRunners Outreach.spec`.
+- **Windows (.msi):** run `build_windows.bat` from the Windows build kit on a Windows PC (cx_Freeze via `setup.py`).
 
 ## Project layout
 
-```
-gmail-outreach-drafts/
-├── outreach_drafts.py     # the script (all logic + setup guide in its docstring)
-├── requirements.txt       # runtime dependencies
-├── requirements-dev.txt   # dev/test dependencies (pytest, hypothesis)
-├── contacts.csv           # sample contacts (header + one row per Template_Type)
-├── README.md              # this file
-├── credentials.json       # OAuth client — YOU supply this (not committed)
-├── token.json             # cached OAuth token — created on first run
-├── attachments/           # demo images referenced by the templates
-│   ├── robot-demo1.jpg
-│   ├── robot-demo2.jpg
-│   ├── robot-demo3.jpg
-│   └── robot-demo5.jpg
-└── tests/                 # pytest + hypothesis test suite
-```
+| Path | Purpose |
+|------|---------|
+| `outreach_drafts.py` | Core logic: auth, templates, MIME building, draft creation |
+| `gui.py` | Desktop GUI (tkinter) |
+| `tests/` | pytest + hypothesis test suite |
+| `docs/` | GitHub Pages download site |
+| `setup.py` | cx_Freeze config for the Windows `.msi` |
 
-## Setup
+## Contributing
 
-### 1. Create a Google Cloud project
+Feature work happens on `feature/*` branches. Open a pull request against `main`. Please keep the test suite green (`pytest`).
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Click the project dropdown at the top and choose **New Project**.
-3. Give it a name (e.g. `CircuitRunners Outreach`) and click **Create**.
+## License
 
-### 2. Enable the Gmail API
-
-1. With your new project selected, open **APIs & Services → Library**.
-2. Search for **Gmail API** and open it.
-3. Click **Enable**.
-
-### 3. Configure the OAuth consent screen
-
-1. Open **APIs & Services → OAuth consent screen**.
-2. Choose **External** (or **Internal** if you use Google Workspace) and fill in
-   the required app name and support email.
-3. Add your own Google account as a **Test user** so you can authorize the app
-   while it is in testing.
-
-### 4. Obtain `credentials.json`
-
-1. Open **APIs & Services → Credentials**.
-2. Click **Create Credentials → OAuth client ID**.
-3. Choose **Desktop app** as the application type and click **Create**.
-4. Download the client configuration and save it as `credentials.json` in this
-   folder (next to `outreach_drafts.py`).
-
-The script requests only the `gmail.compose` scope, which allows creating
-drafts but **cannot send email**.
-
-### 5. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-To also install the test tooling (pytest + hypothesis):
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-### 6. Prepare your contacts and attachments
-
-- Edit `contacts.csv`. Keep the header row exactly:
-  `Recipient_Email,Recipient_Name,Sender_Name,School_Name,Template_Type`
-  and add one row per recipient. `Template_Type` must be one of
-  `Elementary`, `Middle`, `Response`, or `Post-Demo`.
-- Replace the placeholder images in `attachments/` with real demo photos,
-  keeping the same file names (`robot-demo1.jpg`, `robot-demo2.jpg`,
-  `robot-demo3.jpg`, `robot-demo5.jpg`).
-
-## Running the script
-
-```bash
-python outreach_drafts.py
-```
-
-On the first run a browser window opens for you to authorize the app; the
-resulting token is cached in `token.json` and reused on later runs. The script
-processes each contact, creates a draft (pausing ~1 second between drafts to
-respect API limits), skips any row that fails while continuing the run, and
-prints a summary of successes and failures at the end.
-
-Open Gmail's **Drafts** folder to review and send the messages yourself.
-
-## Running the tests
-
-```bash
-pytest
-```
-
-The tests mock the Gmail API and `time.sleep`, so no real emails or drafts are
-created and the suite runs quickly.
+[MIT](./LICENSE)
