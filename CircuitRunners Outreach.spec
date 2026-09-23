@@ -60,5 +60,15 @@ app = BUNDLE(
     coll,
     name='CircuitRunners Outreach.app',
     icon='AppIcon.icns',
-    bundle_identifier=None,
+    bundle_identifier='com.circuitrunners.outreach',
+    info_plist={
+        'CFBundleName': 'CircuitRunners Outreach',
+        'CFBundleDisplayName': 'CircuitRunners Outreach',
+        'CFBundleIdentifier': 'com.circuitrunners.outreach',
+        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '1.1.0',
+        'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '10.15',
+        'NSRequiresAquaSystemAppearance': False,
+    },
 )
